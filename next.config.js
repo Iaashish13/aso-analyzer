@@ -7,6 +7,18 @@ const nextConfig = {
       'natural',
     ],
   },
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'play-lh.googleusercontent.com',
+      },
+      {
+        protocol: 'https',
+        hostname: '**.mzstatic.com',
+      },
+    ],
+  },
 };
 
 module.exports = nextConfig;

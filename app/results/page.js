@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -673,13 +674,14 @@ function CompetitorScreenshots({ stores, locale }) {
                   href={url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block rounded-lg overflow-hidden border border-gray-200 hover:border-green-400 hover:shadow-md transition"
+                  className="relative block aspect-[9/16] rounded-lg overflow-hidden border border-gray-200 hover:border-green-400 hover:shadow-md transition"
                 >
-                  <img
+                  <Image
                     src={url}
                     alt={`${comp.title} screenshot ${idx + 1}`}
-                    className="w-full h-auto object-cover"
-                    loading="lazy"
+                    fill
+                    sizes="(min-width: 1024px) 20vw, (min-width: 768px) 25vw, (min-width: 640px) 33vw, 50vw"
+                    className="object-cover"
                   />
                 </a>
               ))}
