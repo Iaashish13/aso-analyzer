@@ -286,7 +286,7 @@ export default function ResultsPage() {
   const activeKey = localeKey(locale);
   const finalAsoContent = finalByLocale[activeKey];
   const finalError = errorByLocale[activeKey];
-  const isGeneratingActive = generatingLocale === activeKey;
+  const isGeneratingActive = generatingLocale === activeKey || generatingLocale === '__batch__';
 
   async function generateForLocale(localeData) {
     const key = localeKey(localeData.locale);
@@ -325,13 +325,72 @@ export default function ResultsPage() {
   }
 
   async function handleGenerateAll() {
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      const key = localeKey(r.locale);
-      if (finalByLocale[key]) continue;
-      setActiveIdx(i);
-      // eslint-disable-next-line no-await-in-loop
-      await generateForLocale(r);
+    // Build batch of locales not yet generated. Single request, server-side
+    // parallel — concept extraction dedup'd across locales sharing the same
+    // appId, so N locales cost ~1 concept + N parallel synthesis calls.
+    const pending = results.filter((r) => !finalByLocale[localeKey(r.locale)]);
+    if (pending.length === 0) return;
+
+    setGeneratingLocale('__batch__');
+    setErrorByLocale((prev) => {
+      const next = { ...prev };
+      for (const r of pending) next[localeKey(r.locale)] = '';
+      return next;
+    });
+
+    try {
+      const response = await fetch('/api/synthesize/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: pending.map((r) => ({
+            asoPlanJson: r.asoPlanJson,
+            locale: r.locale,
+          })),
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        const message = payload.error || 'Batch generation failed.';
+        setErrorByLocale((prev) => {
+          const next = { ...prev };
+          for (const r of pending) next[localeKey(r.locale)] = message;
+          return next;
+        });
+        return;
+      }
+
+      const items = Array.isArray(payload.results) ? payload.results : [];
+      const okUpdates = {};
+      const errUpdates = {};
+      items.forEach((item, idx) => {
+        const r = pending[idx];
+        if (!r) return;
+        const key = localeKey(r.locale);
+        if (item.ok) {
+          // Strip `ok` + `locale` envelope; UI stores the synthesizeAso result shape.
+          // eslint-disable-next-line no-unused-vars
+          const { ok, locale: _l, ...result } = item;
+          okUpdates[key] = result;
+        } else {
+          errUpdates[key] = item.error || 'Failed to generate.';
+        }
+      });
+      if (Object.keys(okUpdates).length) {
+        setFinalByLocale((prev) => ({ ...prev, ...okUpdates }));
+      }
+      if (Object.keys(errUpdates).length) {
+        setErrorByLocale((prev) => ({ ...prev, ...errUpdates }));
+      }
+    } catch (err) {
+      const message = err.message || 'Batch generation failed.';
+      setErrorByLocale((prev) => {
+        const next = { ...prev };
+        for (const r of pending) next[localeKey(r.locale)] = message;
+        return next;
+      });
+    } finally {
+      setGeneratingLocale(null);
     }
   }
 

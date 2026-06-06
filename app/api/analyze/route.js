@@ -3,6 +3,8 @@ import { scrapeGooglePlay, scrapeAppStore, scrapeCompetitorsOnly } from '@/lib/s
 import { analyzeKeywordGaps } from '@/lib/keywords';
 import { generateAsoPlan } from '@/lib/asoPlan';
 import { getScrapeCache } from '@/lib/scraperCache';
+import { getCanonicalEnListing } from '@/lib/canonicalEnCache';
+import { normalizeBrandName } from '@/lib/brandName';
 
 export const runtime = 'nodejs';
 export const maxDuration = 90;
@@ -73,7 +75,7 @@ async function scrapeWithCache({ store, appId, locale, manualIds }) {
   return scraped;
 }
 
-function buildStorePayload({ store, appId, scraped, keywordAnalysis, asoPlan }) {
+function buildStorePayload({ store, appId, scraped, keywordAnalysis, asoPlan, canonicalEn }) {
   const { myApp, competitors } = scraped;
   return {
     appId,
@@ -85,8 +87,16 @@ function buildStorePayload({ store, appId, scraped, keywordAnalysis, asoPlan }) 
       category: myApp.category || '',
       score: myApp.score || 0,
       installs: myApp.installs || '',
-      price: myApp.price ?? null,
     },
+    ...(canonicalEn ? {
+      canonicalListingEn: {
+        title: canonicalEn.title || '',
+        subtitle: canonicalEn.subtitle || '',
+        shortDescription: canonicalEn.shortDescription || '',
+        description: canonicalEn.description || '',
+        category: canonicalEn.category || '',
+      },
+    } : {}),
     competitors: competitors.map((c) => ({
       appId: c.appId,
       title: c.title,
@@ -107,8 +117,6 @@ function buildStorePayload({ store, appId, scraped, keywordAnalysis, asoPlan }) 
       competitorTitleKeywords: keywordAnalysis.competitorTitleKeywords || [],
     },
     asoPlan: store === 'apple' ? asoPlan.apple : asoPlan.google,
-    myApp,
-    competitorsFull: competitors,
   };
 }
 
@@ -126,9 +134,19 @@ async function scrapeAndAnalyze({ store, appId, manualIds, locale, targetAppName
     scraped = await scrapeWithCache({ store, appId, locale, manualIds });
   }
 
+  // Canonical EN anchor: when the locale is non-English, fetch the app's
+  // EN listing so the synthesizer has a stable semantic source. Skipped for
+  // pre-launch (no real app to fetch) and for EN locales (already canonical).
+  // Cached + dedup'd across parallel locales.
+  let canonicalEn = null;
+  const isEnLocale = (locale?.language || '').toLowerCase() === 'en';
+  if (!preLaunch && appId && !isEnLocale) {
+    canonicalEn = await getCanonicalEnListing(store, appId);
+  }
+
   let keywordAnalysis;
   try {
-    keywordAnalysis = analyzeKeywordGaps(scraped.myApp, scraped.competitors);
+    keywordAnalysis = analyzeKeywordGaps(scraped.myApp, scraped.competitors, locale?.language);
   } catch {
     keywordAnalysis = {
       myKeywords: [], gaps: [], topCompetitorKeywords: [],
@@ -150,12 +168,13 @@ async function scrapeAndAnalyze({ store, appId, manualIds, locale, targetAppName
     scraped,
     keywordAnalysis,
     asoPlan,
-    payload: buildStorePayload({ store, appId, scraped, keywordAnalysis, asoPlan }),
+    payload: buildStorePayload({ store, appId, scraped, keywordAnalysis, asoPlan, canonicalEn }),
   };
 }
 
 function buildCombinedAsoPlanJson({
   targetAppName,
+  targetDescription,
   locale,
   googleResult,
   appleResult,
@@ -168,6 +187,9 @@ function buildCombinedAsoPlanJson({
     stores.google = {
       appId: googleResult.payload.appId,
       currentListing: googleResult.payload.currentListing,
+      ...(googleResult.payload.canonicalListingEn
+        ? { canonicalListingEn: googleResult.payload.canonicalListingEn }
+        : {}),
       competitors: googleResult.payload.competitors,
       keywordAnalysis: googleResult.payload.keywordAnalysis,
       asoPlan: googleResult.payload.asoPlan,
@@ -177,18 +199,25 @@ function buildCombinedAsoPlanJson({
     stores.apple = {
       appId: appleResult.payload.appId,
       currentListing: appleResult.payload.currentListing,
+      ...(appleResult.payload.canonicalListingEn
+        ? { canonicalListingEn: appleResult.payload.canonicalListingEn }
+        : {}),
       competitors: appleResult.payload.competitors,
       keywordAnalysis: appleResult.payload.keywordAnalysis,
       asoPlan: appleResult.payload.asoPlan,
     };
   }
 
-  // Brand name preference: requested → google → apple
-  const brandName =
+  // Brand name preference: requested → google → apple. Always normalized to
+  // strip taglines/subtitles (scraped titles often include " - tagline" or
+  // ": subtitle" which would otherwise leak into the synthesized copy and
+  // break the verbatim brand-presence validator.
+  const brandName = normalizeBrandName(
     targetAppName?.trim() ||
     googleResult?.asoPlan?.brandName ||
     appleResult?.asoPlan?.brandName ||
-    '';
+    ''
+  );
 
   // Cross-store strategy — prefer Google, fallback Apple
   const primary = googleResult?.asoPlan || appleResult?.asoPlan || {};
@@ -198,6 +227,7 @@ function buildCombinedAsoPlanJson({
     generatedAt: new Date().toISOString(),
     brandName,
     requestedBrandName: targetAppName || '',
+    targetDescription: targetDescription || '',
     locale,
     stores,
     crossStoreStrategy: {
@@ -230,6 +260,7 @@ export async function POST(request) {
 
   const preLaunch = !!body.preLaunch;
   const category = String(body.category || '').trim();
+  const targetDescription = String(body.targetDescription || '').trim();
 
   // Back-compat: old shape used { appId, store }
   let googleAppIdRaw = body.googleAppId;
@@ -348,6 +379,7 @@ export async function POST(request) {
 
     const asoPlanJson = buildCombinedAsoPlanJson({
       targetAppName,
+      targetDescription,
       locale,
       googleResult,
       appleResult,

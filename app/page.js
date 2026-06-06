@@ -11,6 +11,11 @@ const PRESET_LOCALES = [
   { id: 'pt-BR', label: 'Português (BR)', country: 'br', language: 'pt' },
   { id: 'id-ID', label: 'Bahasa (ID)', country: 'id', language: 'id' },
   { id: 'es-ES', label: 'Español (ES)', country: 'es', language: 'es' },
+  { id: 'fr-FR', label: 'Français (FR)', country: 'fr', language: 'fr' },
+  { id: 'de-DE', label: 'Deutsch (DE)', country: 'de', language: 'de' },
+  { id: 'vi-VN', label: 'Tiếng Việt (VN)', country: 'vn', language: 'vi' },
+  { id: 'ru-RU', label: 'Русский (RU)', country: 'ru', language: 'ru' },
+  { id: 'ko-KR', label: '한국어 (KR)', country: 'kr', language: 'ko' },
   { id: 'ja-JP', label: '日本語 (JP)', country: 'jp', language: 'ja' },
 ];
 
@@ -25,6 +30,7 @@ export default function HomePage() {
   const [googleAppId, setGoogleAppId] = useState('');
   const [appleAppId, setAppleAppId] = useState('');
   const [targetAppName, setTargetAppName] = useState('');
+  const [targetDescription, setTargetDescription] = useState('');
   const [category, setCategory] = useState('');
   const [preLaunch, setPreLaunch] = useState(false);
   const [selectedLocales, setSelectedLocales] = useState(['en-US']);
@@ -53,6 +59,7 @@ export default function HomePage() {
       if (saved.googleAppId) setGoogleAppId(saved.googleAppId);
       if (saved.appleAppId) setAppleAppId(saved.appleAppId);
       if (saved.targetAppName) setTargetAppName(saved.targetAppName);
+      if (saved.targetDescription) setTargetDescription(saved.targetDescription);
       if (saved.category) setCategory(saved.category);
       if (typeof saved.preLaunch === 'boolean') setPreLaunch(saved.preLaunch);
       if (Array.isArray(saved.selectedLocales) && saved.selectedLocales.length > 0) {
@@ -136,6 +143,7 @@ export default function HomePage() {
     setGoogleAppId(app.googleAppId || '');
     setAppleAppId(app.appleAppId || '');
     setTargetAppName(app.targetAppName || '');
+    setTargetDescription(app.targetDescription || '');
     setCategory(app.category || '');
     setPreLaunch(!!app.preLaunch);
     if (Array.isArray(app.selectedLocales) && app.selectedLocales.length > 0) {
@@ -155,6 +163,7 @@ export default function HomePage() {
         googleAppId: googleAppId.trim(),
         appleAppId: appleAppId.trim(),
         targetAppName: targetAppName.trim(),
+        targetDescription: targetDescription.trim(),
         category: category.trim(),
         preLaunch,
         selectedLocales,
@@ -206,6 +215,7 @@ export default function HomePage() {
       googleAppId: trimmedGoogle,
       appleAppId: trimmedApple,
       targetAppName: targetAppName.trim(),
+      targetDescription: targetDescription.trim(),
       category: category.trim(),
       preLaunch,
       selectedLocales,
@@ -229,6 +239,7 @@ export default function HomePage() {
           googleAppId: preLaunch ? null : (trimmedGoogle || null),
           appleAppId: preLaunch ? null : (trimmedApple || null),
           targetAppName: targetAppName.trim(),
+          targetDescription: targetDescription.trim(),
           category: category.trim(),
           preLaunch,
           locales,
@@ -461,6 +472,24 @@ export default function HomePage() {
             />
             <p className="mt-1 text-xs text-gray-400">
               Optional. Helps Claude pick relevant keywords when no live app exists.
+            </p>
+
+            <label htmlFor="targetDescription" className="block text-sm font-medium text-gray-700 mb-2 mt-4">
+              What the app does (1–3 sentences)
+            </label>
+            <textarea
+              id="targetDescription"
+              value={targetDescription}
+              onChange={(e) => setTargetDescription(e.target.value)}
+              rows={3}
+              placeholder="e.g. A party trivia game where 4–10 players answer questions about each other on a single phone. Friends pass the device around and compete for the funniest answers."
+              className="w-full border border-gray-300 rounded-lg px-4 py-2.5 text-sm
+                         focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent
+                         placeholder-gray-400"
+              disabled={loading}
+            />
+            <p className="mt-1 text-xs text-gray-400">
+              Recommended. Used as the canonical concept across all locales. Without it, Claude infers from competitors only.
             </p>
           </div>
         )}
