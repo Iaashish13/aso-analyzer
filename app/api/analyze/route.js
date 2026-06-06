@@ -86,6 +86,11 @@ function buildStorePayload({ store, appId, scraped, keywordAnalysis, canonicalEn
       category: myApp.category || '',
       score: myApp.score || 0,
       installs: myApp.installs || '',
+      ...(myApp.localeFallback ? {
+        localeFallback: true,
+        localeFallbackSource: myApp.localeFallbackSource || 'en-US',
+        note: 'App not listed in target locale — data sourced from en-US. No existing local listing to preserve.',
+      } : {}),
     },
     ...(canonicalEn ? {
       canonicalListingEn: {
@@ -106,6 +111,7 @@ function buildStorePayload({ store, appId, scraped, keywordAnalysis, canonicalEn
       installs: c.installs || '',
       developer: c.developer || '',
       screenshotCount: c.screenshots?.length || 0,
+      ...(c.localeFallback ? { localeFallback: true } : {}),
     })),
     keywordAnalysis: {
       gaps: keywordAnalysis.gaps || [],
@@ -142,9 +148,13 @@ async function scrapeAndAnalyze({ store, appId, manualIds, locale, targetAppName
     canonicalEn = await getCanonicalEnListing(store, appId);
   }
 
+  // When main app fell back to EN listing, keyword gap analysis must use EN
+  // on the myApp side — comparing EN app text against non-EN competitors is
+  // a language mismatch that produces meaningless gaps.
+  const keywordLang = scraped.myApp.localeFallback ? 'en' : (locale?.language || 'en');
   let keywordAnalysis;
   try {
-    keywordAnalysis = analyzeKeywordGaps(scraped.myApp, scraped.competitors, locale?.language);
+    keywordAnalysis = analyzeKeywordGaps(scraped.myApp, scraped.competitors, keywordLang);
   } catch {
     keywordAnalysis = {
       myKeywords: [], gaps: [], topCompetitorKeywords: [],
@@ -221,6 +231,8 @@ function buildCombinedAsoPlanJson({
       storesScraped: Object.keys(stores),
       googleCompetitorCount: googleResult?.scraped?.competitors?.length || 0,
       appleCompetitorCount: appleResult?.scraped?.competitors?.length || 0,
+      googleLocaleFallbackCompetitors: googleResult?.scraped?.competitors?.filter((c) => c.localeFallback)?.length || 0,
+      appleLocaleFallbackCompetitors: appleResult?.scraped?.competitors?.filter((c) => c.localeFallback)?.length || 0,
       dataSource: 'store-scraper',
       aiRole: preLaunch
         ? 'Pre-launch mode: no live listing exists. Generate listings from scratch using competitor analysis.'
