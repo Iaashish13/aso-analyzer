@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { scrapeGooglePlay, scrapeAppStore, scrapeCompetitorsOnly } from '@/lib/scraper';
 import { analyzeKeywordGaps } from '@/lib/keywords';
-import { generateAsoPlan } from '@/lib/asoPlan';
 import { getScrapeCache } from '@/lib/scraperCache';
 import { getCanonicalEnListing } from '@/lib/canonicalEnCache';
 import { normalizeBrandName } from '@/lib/brandName';
@@ -75,7 +74,7 @@ async function scrapeWithCache({ store, appId, locale, manualIds }) {
   return scraped;
 }
 
-function buildStorePayload({ store, appId, scraped, keywordAnalysis, asoPlan, canonicalEn }) {
+function buildStorePayload({ store, appId, scraped, keywordAnalysis, canonicalEn }) {
   const { myApp, competitors } = scraped;
   return {
     appId,
@@ -116,7 +115,6 @@ function buildStorePayload({ store, appId, scraped, keywordAnalysis, asoPlan, ca
       sharedKeywords: keywordAnalysis.sharedKeywords || [],
       competitorTitleKeywords: keywordAnalysis.competitorTitleKeywords || [],
     },
-    asoPlan: store === 'apple' ? asoPlan.apple : asoPlan.google,
   };
 }
 
@@ -154,21 +152,12 @@ async function scrapeAndAnalyze({ store, appId, manualIds, locale, targetAppName
     };
   }
 
-  const asoPlan = generateAsoPlan({
-    myApp: scraped.myApp,
-    competitors: scraped.competitors,
-    keywordAnalysis,
-    targetAppName,
-    locale,
-  });
-
   return {
     store,
     appId,
     scraped,
     keywordAnalysis,
-    asoPlan,
-    payload: buildStorePayload({ store, appId, scraped, keywordAnalysis, asoPlan, canonicalEn }),
+    payload: buildStorePayload({ store, appId, scraped, keywordAnalysis, canonicalEn }),
   };
 }
 
@@ -192,7 +181,6 @@ function buildCombinedAsoPlanJson({
         : {}),
       competitors: googleResult.payload.competitors,
       keywordAnalysis: googleResult.payload.keywordAnalysis,
-      asoPlan: googleResult.payload.asoPlan,
     };
   }
   if (appleResult) {
@@ -204,23 +192,19 @@ function buildCombinedAsoPlanJson({
         : {}),
       competitors: appleResult.payload.competitors,
       keywordAnalysis: appleResult.payload.keywordAnalysis,
-      asoPlan: appleResult.payload.asoPlan,
     };
   }
 
-  // Brand name preference: requested → google → apple. Always normalized to
-  // strip taglines/subtitles (scraped titles often include " - tagline" or
-  // ": subtitle" which would otherwise leak into the synthesized copy and
-  // break the verbatim brand-presence validator.
+  // Brand name preference: requested → scraped title (google then apple).
+  // Always normalized to strip taglines/subtitles ("Brand: Tagline" →
+  // "Brand") so synthesized copy doesn't inherit the marketing fragment
+  // and the verbatim brand-presence validator doesn't false-fail.
   const brandName = normalizeBrandName(
     targetAppName?.trim() ||
-    googleResult?.asoPlan?.brandName ||
-    appleResult?.asoPlan?.brandName ||
+    googleResult?.scraped?.myApp?.title ||
+    appleResult?.scraped?.myApp?.title ||
     ''
   );
-
-  // Cross-store strategy — prefer Google, fallback Apple
-  const primary = googleResult?.asoPlan || appleResult?.asoPlan || {};
 
   return {
     schemaVersion: '1.2',
@@ -230,11 +214,6 @@ function buildCombinedAsoPlanJson({
     targetDescription: targetDescription || '',
     locale,
     stores,
-    crossStoreStrategy: {
-      primaryTerms: primary.primaryTerms || [],
-      screenshotTextIdeas: primary.screenshots || [],
-      rationale: primary.rationale || '',
-    },
     sourceMeta: {
       competitorMode,
       preLaunch: !!preLaunch,
@@ -396,7 +375,6 @@ export async function POST(request) {
               myApp: googleResult.scraped.myApp,
               competitors: googleResult.scraped.competitors,
               keywordAnalysis: googleResult.keywordAnalysis,
-              asoPlan: googleResult.asoPlan,
             }
           : null,
         apple: appleResult
@@ -404,7 +382,6 @@ export async function POST(request) {
               myApp: appleResult.scraped.myApp,
               competitors: appleResult.scraped.competitors,
               keywordAnalysis: appleResult.keywordAnalysis,
-              asoPlan: appleResult.asoPlan,
             }
           : null,
       },
