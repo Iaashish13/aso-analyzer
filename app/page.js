@@ -338,7 +338,7 @@ export default function HomePage() {
             disabled={loading}
           />
           <label htmlFor="preLaunch" className="text-sm text-amber-900 cursor-pointer">
-            <span className="font-semibold">Pre-launch mode</span> — I don't have a live app yet.
+            <span className="font-semibold">Pre-launch mode</span> — I don&apos;t have a live app yet.
             Generate listings from scratch using competitor data only.
             <span className="block text-xs text-amber-700 mt-0.5">
               Requires: brand name + at least one competitor. App IDs ignored.

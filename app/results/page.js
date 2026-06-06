@@ -18,6 +18,34 @@ function copyToClipboard(text, setter, timeout = 2500) {
   });
 }
 
+function generationErrorMessage(payload, fallback = 'Failed to generate.') {
+  if (!payload || typeof payload !== 'object') return fallback;
+
+  if (payload.code === 'CLAUDE_SESSION_EXPIRED') {
+    return 'Claude Code session expired or is not authenticated. Run `claude` locally and sign in again, then retry.';
+  }
+  if (payload.code === 'CLAUDE_QUOTA_EXHAUSTED') {
+    return 'Claude quota or rate limit was hit. Wait for quota to reset, then retry.';
+  }
+  if (payload.code === 'CLAUDE_SDK_UNAVAILABLE') {
+    return 'Claude Code Agent SDK is unavailable on this machine. Confirm Claude Code is installed and available in this environment.';
+  }
+  if (payload.code === 'ANTHROPIC_API_KEY_MISSING' || payload.code === 'ANTHROPIC_AUTH_FAILED') {
+    return 'Anthropic API authentication failed. Check ANTHROPIC_API_KEY, or set AI_PROVIDER=agent to use local Claude Code.';
+  }
+  if (payload.code === 'ANTHROPIC_QUOTA_EXHAUSTED') {
+    return 'Anthropic API quota or rate limit was hit. Wait for quota to reset, then retry.';
+  }
+  if (payload.code === 'ANTHROPIC_API_UNAVAILABLE') {
+    return 'Anthropic API is unavailable right now. Retry later, or set AI_PROVIDER=agent to use local Claude Code.';
+  }
+  if (payload.code === 'PARSE_FAILED') {
+    return payload.error || 'The model returned malformed JSON after retries.';
+  }
+
+  return payload.error || fallback;
+}
+
 function StarRating({ score }) {
   const rounded = Math.round((score || 0) * 2) / 2;
   const stars = [];
@@ -306,7 +334,7 @@ export default function ResultsPage() {
       if (!response.ok) {
         setErrorByLocale((prev) => ({
           ...prev,
-          [key]: payload.error || 'Failed to generate.',
+          [key]: generationErrorMessage(payload),
         }));
         return false;
       }
@@ -373,7 +401,7 @@ export default function ResultsPage() {
           const { ok, locale: _l, ...result } = item;
           okUpdates[key] = result;
         } else {
-          errUpdates[key] = item.error || 'Failed to generate.';
+          errUpdates[key] = generationErrorMessage(item);
         }
       });
       if (Object.keys(okUpdates).length) {
@@ -623,7 +651,7 @@ function CompetitorScreenshots({ stores, locale }) {
         Competitor Screenshots ({localeLabel(locale)})
       </h2>
       <p className="text-sm text-gray-500 mb-6">
-        Visual reference from both stores' competitors.
+        Visual reference from both stores&apos; competitors.
       </p>
 
       <div className="flex flex-col gap-8">

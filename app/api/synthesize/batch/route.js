@@ -1,17 +1,35 @@
 import { NextResponse } from 'next/server';
-import { AgentSDKProvider } from '@/lib/ai/agentSDKProvider';
 import { synthesizeAso } from '@/lib/ai/asoAgent';
 import { ProviderError } from '@/lib/ai/provider';
+import { createAIProvider } from '@/lib/ai/providerFactory';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
 // Hard cap to prevent runaway requests. Tune as needed.
 const MAX_BATCH_ITEMS = 20;
+const BATCH_CONCURRENCY = 3;
+
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex++;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
 
 /**
- * Batch synthesis endpoint. Fans out per-locale synthesizeAso calls in
- * parallel and returns results in input order. Per-item failures are
+ * Batch synthesis endpoint. Runs per-locale synthesizeAso calls with bounded
+ * concurrency and returns results in input order. Per-item failures are
  * captured — one bad locale does not fail the whole batch.
  *
  * Request:
@@ -20,11 +38,10 @@ const MAX_BATCH_ITEMS = 20;
  * Response:
  *   { results: [{ ok: true, ...synthesizeAsoResult } | { ok: false, error, code }, ...] }
  *
- * Server-side parallelism wins twice:
- *   1. Concurrent locales overlap on latency (single roundtrip for caller).
- *   2. Concept-cache in-flight dedup means the first locale's concept
- *      extraction is reused by all others, instead of N parallel HTTP calls
- *      each doing their own.
+ * Server-side bounded concurrency wins twice:
+ *   1. Locales overlap on latency without flooding the local Agent SDK.
+ *   2. Concept-cache in-flight dedup means shared extraction is reused,
+ *      instead of N parallel HTTP calls each doing their own.
  */
 export async function POST(request) {
   let body;
@@ -54,10 +71,12 @@ export async function POST(request) {
     }
   }
 
-  const provider = new AgentSDKProvider();
+  const provider = createAIProvider();
 
-  const results = await Promise.all(
-    items.map(async (item) => {
+  const results = await mapWithConcurrency(
+    items,
+    BATCH_CONCURRENCY,
+    async (item) => {
       try {
         const result = await synthesizeAso({
           provider,
@@ -74,7 +93,7 @@ export async function POST(request) {
           code: isProviderErr ? err.code : 'UNKNOWN',
         };
       }
-    })
+    }
   );
 
   return NextResponse.json({ results });

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { AgentSDKProvider } from '@/lib/ai/agentSDKProvider';
 import { synthesizeAso } from '@/lib/ai/asoAgent';
 import { ProviderError } from '@/lib/ai/provider';
+import { createAIProvider } from '@/lib/ai/providerFactory';
 
 export const runtime = 'nodejs';
 export const maxDuration = 90;
@@ -19,7 +19,7 @@ export async function POST(request) {
     return NextResponse.json({ error: 'asoPlanJson is required.' }, { status: 400 });
   }
 
-  const provider = new AgentSDKProvider();
+  const provider = createAIProvider();
 
   try {
     const result = await synthesizeAso({

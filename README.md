@@ -1,6 +1,11 @@
 # ASO Analyzer
 
-A self-hosted App Store Optimization tool that scrapes Google Play and the Apple App Store, performs cross-store keyword gap analysis, and uses **Claude (via the local Claude Code CLI)** to generate native, ranking-optimized listings per locale — without requiring an Anthropic API key.
+A self-hosted App Store Optimization tool that scrapes Google Play and the Apple App Store, performs cross-store keyword gap analysis, and uses **Claude** to generate native, ranking-optimized listings per locale.
+
+AI generation supports two provider paths:
+
+- **Anthropic API** with forced structured output when `ANTHROPIC_API_KEY` is set
+- **Local Claude Code Agent SDK** fallback, using your authenticated Claude Code session
 
 Built with Next.js 14 (App Router). No database. Results live in browser `localStorage`.
 
@@ -16,20 +21,28 @@ Built with Next.js 14 (App Router). No database. Results live in browser `localS
 - **Saved competitor sets** — reuse competitor lists across runs
 - **Heuristic draft plan + AI plan** — instant rule-based draft, optional AI synthesis
 - **Cross-store keyword merge** — competitor pools from both stores feed the AI prompt
-- **Char-limit linting** — enforces Apple/Google field limits on AI output
-- **No API key required** — uses your local Claude Code session via `@anthropic-ai/claude-agent-sdk`
+- **Structured AI output** — Anthropic API path uses forced tool/schema output for final ASO JSON
+- **Output repair loop** — malformed JSON, schema failures, char limits, brand rules, and language checks trigger targeted retries
+- **Batch stability** — "Generate all locales" uses bounded server-side concurrency
+- **Char-limit linting** — validates Apple/Google field limits on AI output
+- **Flexible AI provider** — direct Anthropic API for deployments, local Claude Code Agent SDK for no-key local use
 
 ---
 
 ## Prerequisites
 
 1. **Node.js ≥ 18**
-2. **[Claude Code CLI](https://claude.com/claude-code) installed and authenticated**
-   - The tool spawns the `claude` binary as a subprocess for AI synthesis
-   - Verify with: `claude -p "say ok"` — should return a short reply
-3. **Claude Code subscription** (Pro or Max). Each AI synthesis consumes your Claude Code session quota.
+2. One Claude provider:
+   - **Recommended for reliability/deployments:** `ANTHROPIC_API_KEY`
+   - **Local fallback:** [Claude Code CLI](https://claude.com/claude-code) installed and authenticated
 
-If you do not have or want Claude Code, see [Swap the AI provider](#swap-the-ai-provider) below for an Anthropic API alternative.
+For Claude Code fallback, verify with:
+
+```bash
+claude -p "say ok"
+```
+
+Each AI synthesis consumes either Anthropic API usage or your Claude Code session quota, depending on the active provider.
 
 ---
 
@@ -85,21 +98,33 @@ Browser ◀── factual asoPlanJson + per-locale results
 Click "Generate Final ASO Content":
        │
        ▼  POST /api/synthesize
-AgentSDKProvider (lib/ai/agentSDKProvider.js)
+createAIProvider() (lib/ai/providerFactory.js)
        │
-       ▼  spawns `claude` subprocess via @anthropic-ai/claude-agent-sdk
-Claude (Anthropic backend, via your Claude Code login)
+       ├──▶ AnthropicAPIProvider when ANTHROPIC_API_KEY exists
+       │       └─▶ Messages API + forced tool/schema output
+       │
+       └──▶ AgentSDKProvider fallback
+               └─▶ local Claude Code subprocess via @anthropic-ai/claude-agent-sdk
        │
        ▼  returns JSON
 asoAgent.js
+       │  - balanced JSON extraction + conservative repair fallback
        │  - zod schema validation
-       ▼  - char-limit linting
+       │  - char-limit / brand / language validation
+       ▼  - targeted repair retry when constraints fail
 Browser ◀── final Apple + Google + screenshot copy per locale
 ```
 
-### Why local subprocess?
+### Provider behavior
 
-The Claude Agent SDK uses your authenticated Claude Code session, so the app does not need an API key. The trade-off: it only works on the machine where Claude Code is installed and logged in. For multi-user deployments, swap to the Anthropic API (see below).
+The default provider selection is:
+
+1. `AI_PROVIDER=anthropic` or `AI_PROVIDER=api` → direct Anthropic API
+2. `AI_PROVIDER=agent` or `AI_PROVIDER=agent-sdk` → local Claude Code Agent SDK
+3. If `AI_PROVIDER` is unset and `ANTHROPIC_API_KEY` exists → direct Anthropic API
+4. Otherwise → local Claude Code Agent SDK
+
+The Anthropic API path is preferred for deployed or multi-user environments because it does not depend on a local Claude Code login. The Agent SDK path remains useful for local use without an API key, but it only works on the machine where Claude Code is installed and authenticated.
 
 ---
 
@@ -111,8 +136,9 @@ The Claude Agent SDK uses your authenticated Claude Code session, so the app doe
 │   ├── page.js                  # Home form: app IDs, brand, locales, competitors
 │   ├── results/page.js          # Results: locale tabs, scraped data, AI output
 │   ├── api/
-│   │   ├── analyze/route.js     # Scrape + keyword gap + asoPlanJson builder
-│   │   └── synthesize/route.js  # Claude synthesis via Agent SDK
+│   │   ├── analyze/route.js             # Scrape + keyword gap + asoPlanJson builder
+│   │   ├── synthesize/route.js          # Single-locale AI synthesis
+│   │   └── synthesize/batch/route.js    # Multi-locale synthesis with concurrency cap
 │   └── layout.js
 │
 ├── lib/
@@ -123,10 +149,14 @@ The Claude Agent SDK uses your authenticated Claude Code session, so the app doe
 │   ├── savedApps.js             # localStorage CRUD: own-app profiles
 │   ├── savedSets.js             # localStorage CRUD: competitor sets
 │   └── ai/
-│       ├── provider.js          # Provider interface + ProviderError
-│       ├── agentSDKProvider.js  # @anthropic-ai/claude-agent-sdk impl
-│       └── asoAgent.js          # System prompt, zod schema, JSON parser
+│       ├── provider.js              # Provider interface + ProviderError
+│       ├── providerFactory.js       # Env-based provider selection
+│       ├── anthropicAPIProvider.js  # Direct Messages API + tool/schema output
+│       ├── agentSDKProvider.js      # @anthropic-ai/claude-agent-sdk fallback
+│       ├── conceptExtractor.js      # App concept extraction
+│       └── asoAgent.js              # Prompt, zod schema, JSON parser, repair loop
 │
+├── .eslintrc.json
 ├── next.config.js
 ├── tailwind.config.js
 └── package.json
@@ -136,54 +166,32 @@ The Claude Agent SDK uses your authenticated Claude Code session, so the app doe
 
 ## Configuration
 
-No environment variables required for the default Agent SDK path. The local `claude` CLI handles authentication via your existing Claude Code login.
+Create `.env.local` for the direct API path:
 
-To use the Anthropic API directly instead, see [Swap the AI provider](#swap-the-ai-provider) below.
-
----
-
-## Swap the AI provider
-
-To use the Anthropic API directly instead of Claude Code, implement a new provider:
-
-```js
-// lib/ai/anthropicAPIProvider.js
-import Anthropic from '@anthropic-ai/sdk';
-import { ProviderError } from './provider.js';
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-export class AnthropicAPIProvider {
-  async generate({ systemPrompt, userPrompt, abortSignal }) {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
-    }, { signal: abortSignal });
-
-    return {
-      text: response.content[0].text,
-      costUsd: 0, // compute from usage if needed
-      model: response.model,
-    };
-  }
-}
+```bash
+ANTHROPIC_API_KEY=your_api_key
 ```
 
-Then in `app/api/synthesize/route.js`, replace:
+Optional environment variables:
 
-```js
-const provider = new AgentSDKProvider();
+```bash
+AI_PROVIDER=anthropic                  # anthropic/api, agent/agent-sdk
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
+ANTHROPIC_MAX_TOKENS=12000
 ```
 
-with:
+If `ANTHROPIC_API_KEY` is not set, the app falls back to your local Claude Code session through `@anthropic-ai/claude-agent-sdk`.
 
-```js
-const provider = new AnthropicAPIProvider();
-```
+### Error handling
 
-Add `ANTHROPIC_API_KEY` to `.env.local`. This works in deployed environments (Vercel etc.) where Claude Code is not available.
+The API normalizes common provider failures so the UI can show actionable messages:
+
+- `CLAUDE_SESSION_EXPIRED` — local Claude Code is logged out or unauthenticated
+- `CLAUDE_QUOTA_EXHAUSTED` — local Claude Code quota or rate limit hit
+- `CLAUDE_SDK_UNAVAILABLE` — Claude Code/Agent SDK unavailable locally
+- `ANTHROPIC_AUTH_FAILED` — invalid or missing Anthropic API credentials
+- `ANTHROPIC_QUOTA_EXHAUSTED` — Anthropic API quota or rate limit hit
+- `PARSE_FAILED` / `SCHEMA_INVALID` — model output could not be repaired or validated
 
 ---
 
@@ -199,11 +207,12 @@ Add `ANTHROPIC_API_KEY` to `.env.local`. This works in deployed environments (Ve
 ## Known limits
 
 1. **Claude Code subscription required** for the Agent SDK path. Heavy testing consumes your Pro/Max quota fast.
-2. **maxDuration = 90s** per route. With many locales × stores, scraping can exceed this on production deploys. Locally (`npm run dev`) there is no limit.
-3. **App Store keyword field (100 char hidden)** cannot be scraped from any store API — Apple does not expose it. The tool infers what competitors likely use by analyzing their title + subtitle word patterns.
-4. **No real keyword search volume** — those numbers are only available via paid services (AppTweak, Sensor Tower, etc.). Competitor frequency is used as a proxy.
-5. **Brazilian / Indonesian / Japanese stopword filtering** uses English defaults from the `natural` library. Non-English locale token frequency is still useful but slightly noisier.
-6. **No database** — clear browser storage and saved profiles are gone. Export/import to JSON is planned.
+2. **Anthropic API key required** for deployed direct API usage. Without it, deployed environments usually cannot use the local Agent SDK fallback.
+3. **maxDuration = 90s** for single synthesis and analyze routes; batch synthesis allows longer server time but still depends on host limits.
+4. **App Store keyword field (100 char hidden)** cannot be scraped from any store API — Apple does not expose it. The tool infers what competitors likely use by analyzing their title + subtitle word patterns.
+5. **No real keyword search volume** — those numbers are only available via paid services (AppTweak, Sensor Tower, etc.). Competitor frequency is used as a proxy.
+6. **Brazilian / Indonesian / Japanese stopword filtering** uses English defaults from the `natural` library. Non-English locale token frequency is still useful but slightly noisier.
+7. **No database** — clear browser storage and saved profiles are gone. Export/import to JSON is planned.
 
 ---
 
@@ -213,14 +222,15 @@ Add `ANTHROPIC_API_KEY` to `.env.local`. This works in deployed environments (Ve
 npm run dev      # Start dev server at http://localhost:3000
 npm run build    # Build for production
 npm run start    # Serve production build
-npm run lint     # Run ESLint (currently unconfigured)
+npm run lint     # Run ESLint / Next core web vitals checks
 ```
 
 ---
 
 ## Roadmap
 
-- [ ] Anthropic API provider (multi-user deployments)
+- [x] Anthropic API provider (multi-user deployments)
+- [x] Structured-output ASO generation via Anthropic tool/schema calls
 - [ ] JSON export / import for saved profiles + competitor sets
 - [ ] Background job queue for >2 locales × 2 stores (lifts maxDuration ceiling)
 - [ ] Real search volume integration (AppTweak / Sensor Tower / Search Ads API)
@@ -237,7 +247,8 @@ npm run lint     # Run ESLint (currently unconfigured)
 2. Create a feature branch: `git checkout -b feat/your-feature`
 3. Run `npm install && npm run dev`
 4. Make changes, verify `npm run build` succeeds
-5. Open a pull request
+5. Run `npm run lint`
+6. Open a pull request
 
 When changing scraper behavior, run a quick sanity check against a known app (e.g. `com.whatsapp`) to confirm the scrape still returns expected fields.
 
@@ -254,6 +265,7 @@ When changing scraper behavior, run a quick sanity check against a known app (e.
 - [`google-play-scraper`](https://github.com/facundoolano/google-play-scraper)
 - [`app-store-scraper`](https://github.com/facundoolano/app-store-scraper)
 - [`natural`](https://github.com/NaturalNode/natural) — NLP tokenizer
+- [Anthropic Messages API](https://docs.anthropic.com) — direct structured generation path
 - [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) — local Claude Code integration
 - [`zod`](https://zod.dev) — runtime schema validation
 - [Next.js 14](https://nextjs.org)
